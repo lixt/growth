@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes import router as api_router
 
 
-app = FastAPI(title="StockLab")
+app = FastAPI(title="Growth")
 
 app.add_middleware(
     CORSMiddleware,

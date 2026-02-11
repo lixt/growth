@@ -43,7 +43,7 @@ export default function App() {
   return (
     <div className="page">
       <header className="topbar">
-        <div className="brand">StockLab</div>
+        <div className="brand">Growth</div>
         <SearchBox onSelect={setSelected} />
       </header>
 

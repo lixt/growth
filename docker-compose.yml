@@ -5,7 +5,7 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: stocklab
+      POSTGRES_DB: growth
     ports:
       - "5432:5432"
     volumes:
