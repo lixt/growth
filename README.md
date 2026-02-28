@@ -52,12 +52,20 @@ python -m scripts.sync_minute
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-## Frontend
+## Streamlit Frontend (Recommended)
 
 ```bash
-cd frontend
-npm install
-npm run dev
+cd streamlit
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+If you want to use the backend venv:
+
+```bash
+cd backend
+.venv/bin/pip install -r ../streamlit/requirements.txt
+.venv/bin/streamlit run ../streamlit/app.py
 ```
 
 ## One-command Dev
@@ -66,17 +74,13 @@ npm run dev
 ./dev.sh
 ```
 
-## Serve Frontend From Backend (Production-like)
+## Legacy React Frontend (Optional)
 
 ```bash
 cd frontend
-npm run build
-
-cd ../backend
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+npm install
+npm run dev
 ```
-
-Then open http://localhost:8000
 
 ## API endpoints
 - `GET /api/search?q=`
