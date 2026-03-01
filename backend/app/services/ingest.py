@@ -1,11 +1,9 @@
-from collections import deque
-from datetime import datetime, timedelta
-import time
-from sqlalchemy.orm import Session
-from sqlalchemy.dialects.postgresql import insert
-
 from typing import Optional
-from app.models import StockBasic, TradeCal, Bar1D, Bar1M
+
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.orm import Session
+
+from app.models import StockBasic, TradeCal, Bar1D, SuspendD
 from app.providers.tushare_provider import TushareProvider
 
 
@@ -81,56 +79,73 @@ def upsert_daily(db: Session, trade_date: str):
     return result.rowcount
 
 
-def upsert_minute(db: Session, ts_code: str, trade_date: str):
-    df = provider.pro_bar_1m(ts_code, trade_date)
+def replace_daily(db: Session, trade_date: str):
+    db.query(Bar1D).filter(Bar1D.trade_date == trade_date).delete(synchronize_session=False)
+    db.commit()
+    return upsert_daily(db, trade_date)
+
+
+def clear_day_data(db: Session, trade_date: str):
+    SuspendD.__table__.create(bind=db.get_bind(), checkfirst=True)
+    daily_deleted = db.query(Bar1D).filter(Bar1D.trade_date == trade_date).delete(synchronize_session=False)
+    suspend_deleted = db.query(SuspendD).filter(SuspendD.trade_date == trade_date).delete(synchronize_session=False)
+    db.commit()
+    return {
+        "daily_deleted": int(daily_deleted or 0),
+        "suspend_deleted": int(suspend_deleted or 0),
+    }
+
+
+def _normalize_suspend_rows(df):
     if df is None or df.empty:
+        return []
+    keep = [c for c in ["trade_date", "ts_code", "suspend_timing", "suspend_type"] if c in df.columns]
+    rows = df[keep].to_dict(orient="records")
+    # 仅保留停牌记录；有些账号或参数会返回复牌记录
+    return [r for r in rows if str(r.get("suspend_type") or "").upper() in {"", "S"}]
+
+
+def _chunk_codes(codes: list[str], size: int = 200):
+    for i in range(0, len(codes), size):
+        yield codes[i : i + size]
+
+
+def upsert_suspend_d(db: Session, trade_date: str, focus_ts_codes: Optional[list[str]] = None):
+    SuspendD.__table__.create(bind=db.get_bind(), checkfirst=True)
+
+    # 先拉取当日全部停复牌，再统一筛选停牌(S)，和官网调试口径一致
+    rows = _normalize_suspend_rows(provider.suspend_d(trade_date=trade_date, suspend_type=None))
+    dedup = {(r.get("trade_date"), r.get("ts_code")): r for r in rows if r.get("trade_date") and r.get("ts_code")}
+
+    # 若按交易日返回为空或明显偏少，对缺失股票做分批兜底查询
+    if focus_ts_codes:
+        for batch in _chunk_codes(sorted(set(focus_ts_codes))):
+            df = provider.suspend_d(
+                ts_code=",".join(batch),
+                start_date=trade_date,
+                end_date=trade_date,
+                suspend_type=None,
+            )
+            for row in _normalize_suspend_rows(df):
+                key = (row.get("trade_date"), row.get("ts_code"))
+                if key[0] and key[1]:
+                    dedup[key] = row
+
+    db.query(SuspendD).filter(SuspendD.trade_date == trade_date).delete(synchronize_session=False)
+    db.commit()
+
+    if not dedup:
         return 0
 
-    if "trade_time" not in df.columns and "trade_date" in df.columns:
-        df["trade_time"] = df["trade_date"].apply(lambda x: datetime.strptime(str(x), "%Y%m%d%H%M%S"))
-    elif "trade_time" in df.columns:
-        df["trade_time"] = df["trade_time"].apply(
-            lambda x: x if isinstance(x, datetime) else datetime.strptime(str(x), "%Y-%m-%d %H:%M:%S")
-        )
-
-    rows = df[["ts_code", "trade_time", "open", "high", "low", "close", "vol", "amount"]].to_dict(orient="records")
-    stmt = insert(Bar1M).values(rows)
+    rows = list(dedup.values())
+    stmt = insert(SuspendD).values(rows)
     stmt = stmt.on_conflict_do_update(
-        index_elements=[Bar1M.ts_code, Bar1M.trade_time],
+        index_elements=[SuspendD.trade_date, SuspendD.ts_code],
         set_={
-            "open": stmt.excluded.open,
-            "high": stmt.excluded.high,
-            "low": stmt.excluded.low,
-            "close": stmt.excluded.close,
-            "vol": stmt.excluded.vol,
-            "amount": stmt.excluded.amount,
+            "suspend_timing": stmt.excluded.suspend_timing,
+            "suspend_type": stmt.excluded.suspend_type,
         },
     )
     result = db.execute(stmt)
     db.commit()
     return result.rowcount
-
-
-def cleanup_old_minute(db: Session, keep_days: int = 365):
-    cutoff = datetime.utcnow() - timedelta(days=keep_days)
-    db.query(Bar1M).filter(Bar1M.trade_time < cutoff).delete(synchronize_session=False)
-    db.commit()
-
-
-def sync_minute_all(db: Session, trade_date: str, rate_per_min: int = 480):
-    codes = [row.ts_code for row in db.query(StockBasic.ts_code).all()]
-    window = deque()
-
-    for idx, ts_code in enumerate(codes, start=1):
-        while len(window) >= rate_per_min:
-            now = time.time()
-            if now - window[0] >= 60:
-                window.popleft()
-            else:
-                time.sleep(0.2)
-
-        upsert_minute(db, ts_code, trade_date)
-        window.append(time.time())
-
-        if idx % 200 == 0:
-            time.sleep(0.5)

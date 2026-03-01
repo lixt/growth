@@ -58,3 +58,16 @@ class Bar1M(Base):
     __table_args__ = (
         Index("ix_bar_1m_ts_code_trade_time", "ts_code", "trade_time"),
     )
+
+
+class SuspendD(Base):
+    __tablename__ = "suspend_d"
+
+    trade_date: Mapped[str] = mapped_column(String(8), primary_key=True)
+    ts_code: Mapped[str] = mapped_column(String(12), primary_key=True)
+    suspend_timing: Mapped[Optional[str]] = mapped_column(String(64))
+    suspend_type: Mapped[Optional[str]] = mapped_column(String(32))
+
+    __table_args__ = (
+        Index("ix_suspend_d_trade_date_ts_code", "trade_date", "ts_code"),
+    )

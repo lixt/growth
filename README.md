@@ -40,13 +40,7 @@ python -m scripts.bootstrap
 python -m scripts.sync_daily
 ```
 
-6. Sync minute data (latest open day) — full market, heavy
-
-```bash
-python -m scripts.sync_minute
-```
-
-7. Run API
+6. Run API
 
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -85,10 +79,11 @@ npm run dev
 ## API endpoints
 - `GET /api/search?q=`
 - `GET /api/trade/last_open`
-- `GET /api/stock/{ts_code}/intraday?date=YYYYMMDD`
 - `GET /api/stock/{ts_code}/kline?start=YYYYMMDD&end=YYYYMMDD`
-- `POST /api/admin/sync?mode=basic|trade_cal|daily|minute&date=YYYYMMDD&rate_per_min=480&ts_code=000001.SZ`
+- `POST /api/admin/sync?mode=basic|trade_cal|daily&date=YYYYMMDD`
+- `GET /api/data/calendar?month=YYYYMM`
+- `POST /api/admin/sync/full_day?date=YYYYMMDD&overwrite=true`
+- `GET /api/admin/tasks?limit=20`
 
 ## Notes
-- Minute data is large. Default retention is 12 months (rolling cleanup in `scripts.sync_minute`).
-- For production, consider OSS/Parquet archive for historical minutes, or a columnar DB.
+- 当前版本仅保留日线（K线）数据的拉取、存储和展示。

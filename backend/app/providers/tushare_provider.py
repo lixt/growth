@@ -1,3 +1,5 @@
+from typing import Optional
+
 import tushare as ts
 
 from app.settings import settings
@@ -16,14 +18,23 @@ class TushareProvider:
     def daily(self, trade_date: str):
         return self._pro.daily(trade_date=trade_date)
 
-    def pro_bar_1m(self, ts_code: str, trade_date: str):
-        start = f"{trade_date} 09:25:00"
-        end = f"{trade_date} 15:05:00"
-        return ts.pro_bar(
-            ts_code=ts_code,
-            api=self._pro,
-            freq="1min",
-            start_date=start,
-            end_date=end,
-            asset="E",
-        )
+    def suspend_d(
+        self,
+        trade_date: Optional[str] = None,
+        suspend_type: Optional[str] = "S",
+        ts_code: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ):
+        params = {}
+        if ts_code:
+            params["ts_code"] = ts_code
+        if trade_date:
+            params["trade_date"] = trade_date
+        if start_date:
+            params["start_date"] = start_date
+        if end_date:
+            params["end_date"] = end_date
+        if suspend_type:
+            params["suspend_type"] = suspend_type
+        return self._pro.query("suspend_d", **params)
