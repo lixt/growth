@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router as api_router
+from app.db import Base, engine
+from app import models  # noqa: F401
 
 
 app = FastAPI(title="Growth")
@@ -23,6 +25,11 @@ def health():
 
 
 app.include_router(api_router, prefix="/api")
+
+
+@app.on_event("startup")
+def ensure_tables():
+    Base.metadata.create_all(bind=engine)
 
 
 def _mount_frontend(app_instance: FastAPI):

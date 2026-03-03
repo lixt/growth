@@ -68,6 +68,8 @@ cd backend
 ./dev.sh
 ```
 
+`dev.sh` will start FastAPI with `--reload` for local development.
+
 ## Legacy React Frontend (Optional)
 
 ```bash

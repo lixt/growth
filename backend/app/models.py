@@ -43,6 +43,42 @@ class Bar1D(Base):
     )
 
 
+class Index1D(Base):
+    __tablename__ = "index_1d"
+
+    ts_code: Mapped[str] = mapped_column(String(12), primary_key=True)
+    trade_date: Mapped[str] = mapped_column(String(8), primary_key=True)
+    open: Mapped[Optional[float]] = mapped_column(Numeric(12, 4))
+    high: Mapped[Optional[float]] = mapped_column(Numeric(12, 4))
+    low: Mapped[Optional[float]] = mapped_column(Numeric(12, 4))
+    close: Mapped[Optional[float]] = mapped_column(Numeric(12, 4))
+    pre_close: Mapped[Optional[float]] = mapped_column(Numeric(12, 4))
+    change: Mapped[Optional[float]] = mapped_column(Numeric(12, 4))
+    pct_chg: Mapped[Optional[float]] = mapped_column(Numeric(12, 4))
+    vol: Mapped[Optional[float]] = mapped_column(Numeric(20, 4))
+    amount: Mapped[Optional[float]] = mapped_column(Numeric(20, 4))
+
+    __table_args__ = (
+        Index("ix_index_1d_trade_date_ts_code", "trade_date", "ts_code"),
+    )
+
+
+class DailyBasic1D(Base):
+    __tablename__ = "daily_basic_1d"
+
+    ts_code: Mapped[str] = mapped_column(String(12), primary_key=True)
+    trade_date: Mapped[str] = mapped_column(String(8), primary_key=True)
+    turnover_rate: Mapped[Optional[float]] = mapped_column(Numeric(12, 4))
+    pe: Mapped[Optional[float]] = mapped_column(Numeric(14, 4))
+    pb: Mapped[Optional[float]] = mapped_column(Numeric(14, 4))
+    total_mv: Mapped[Optional[float]] = mapped_column(Numeric(20, 4))
+    circ_mv: Mapped[Optional[float]] = mapped_column(Numeric(20, 4))
+
+    __table_args__ = (
+        Index("ix_daily_basic_1d_trade_date_ts_code", "trade_date", "ts_code"),
+    )
+
+
 class Bar1M(Base):
     __tablename__ = "bar_1m"
 

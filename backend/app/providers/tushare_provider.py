@@ -18,6 +18,20 @@ class TushareProvider:
     def daily(self, trade_date: str):
         return self._pro.daily(trade_date=trade_date)
 
+    def daily_basic(self, trade_date: str):
+        return self._pro.daily_basic(
+            trade_date=trade_date,
+            fields="ts_code,trade_date,turnover_rate,pe,pb,total_mv,circ_mv",
+        )
+
+    def index_daily(self, trade_date: Optional[str] = None, ts_code: Optional[str] = None):
+        params = {}
+        if trade_date:
+            params["trade_date"] = trade_date
+        if ts_code:
+            params["ts_code"] = ts_code
+        return self._pro.index_daily(**params)
+
     def suspend_d(
         self,
         trade_date: Optional[str] = None,

@@ -2,6 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import and_, distinct, func
 from sqlalchemy.orm import Session
 
+from app.constants import INDEX_BENCHMARKS
 from app.db import get_session
 from app import crud
 from typing import Optional
@@ -11,19 +12,25 @@ from app.schemas import (
     TradeDate,
     CalendarStatusResponse,
     CalendarDayStatus,
+    MarketOverviewResponse,
     UnresolvedStockItem,
     UnresolvedStocksResponse,
+    IndexSnapshotResponse,
 )
 from app.db import SessionLocal
 from app.services.ingest import (
     upsert_stock_basic,
     upsert_trade_cal,
     upsert_daily,
+    upsert_daily_basic,
+    upsert_index_daily,
     replace_daily,
+    replace_daily_basic,
+    replace_index_daily,
     upsert_suspend_d,
     clear_day_data,
 )
-from app.models import Bar1D, StockBasic, SuspendD
+from app.models import Bar1D, Index1D, StockBasic, SuspendD
 from app.services.task_tracker import task_tracker
 
 
@@ -96,6 +103,71 @@ def day_unresolved(
     return UnresolvedStocksResponse(date=date, items=[UnresolvedStockItem(**i) for i in items])
 
 
+@router.get("/data/index_snapshot", response_model=IndexSnapshotResponse)
+def index_snapshot(
+    date: str = Query(..., pattern=r"^\d{8}$"),
+    db: Session = Depends(get_session),
+):
+    indices = crud.get_index_snapshots(db, date=date)
+    return IndexSnapshotResponse(date=date, indices=indices)
+
+
+@router.get("/market/overview", response_model=MarketOverviewResponse)
+def market_overview(
+    date: str = Query(..., pattern=r"^\d{8}$"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=10, le=200),
+    sort_by: str = Query(default="amount"),
+    sort_order: str = Query(default="desc", pattern=r"^(asc|desc)$"),
+    q: Optional[str] = Query(default=None),
+    market: Optional[str] = Query(default=None),
+    min_close: Optional[float] = Query(default=None),
+    max_close: Optional[float] = Query(default=None),
+    min_amount: Optional[float] = Query(default=None),
+    max_amount: Optional[float] = Query(default=None),
+    min_vol: Optional[float] = Query(default=None),
+    max_vol: Optional[float] = Query(default=None),
+    min_total_mv: Optional[float] = Query(default=None),
+    max_total_mv: Optional[float] = Query(default=None),
+    min_circ_mv: Optional[float] = Query(default=None),
+    max_circ_mv: Optional[float] = Query(default=None),
+    min_turnover_rate: Optional[float] = Query(default=None),
+    max_turnover_rate: Optional[float] = Query(default=None),
+    min_pe: Optional[float] = Query(default=None),
+    max_pe: Optional[float] = Query(default=None),
+    min_pb: Optional[float] = Query(default=None),
+    max_pb: Optional[float] = Query(default=None),
+    db: Session = Depends(get_session),
+):
+    data = crud.get_market_overview(
+        db,
+        date=date,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        q=q,
+        market=market,
+        min_close=min_close,
+        max_close=max_close,
+        min_amount=min_amount,
+        max_amount=max_amount,
+        min_vol=min_vol,
+        max_vol=max_vol,
+        min_total_mv=min_total_mv,
+        max_total_mv=max_total_mv,
+        min_circ_mv=min_circ_mv,
+        max_circ_mv=max_circ_mv,
+        min_turnover_rate=min_turnover_rate,
+        max_turnover_rate=max_turnover_rate,
+        min_pe=min_pe,
+        max_pe=max_pe,
+        min_pb=min_pb,
+        max_pb=max_pb,
+    )
+    return MarketOverviewResponse(**data)
+
+
 def _run_sync(mode: str, date: Optional[str]):
     db = SessionLocal()
     try:
@@ -110,8 +182,13 @@ def _run_sync(mode: str, date: Optional[str]):
         if not target:
             return
 
+        if mode == "index":
+            upsert_index_daily(db, target)
+            return
+
         if mode == "daily":
             upsert_daily(db, target)
+            upsert_daily_basic(db, target)
             return
     finally:
         db.close()
@@ -121,6 +198,22 @@ def _run_full_day_sync(task_id: str, date: str, overwrite: bool):
     task_tracker.start_task(task_id)
     db = SessionLocal()
     try:
+        index_codes = [code for code, _ in INDEX_BENCHMARKS]
+        index_total = len(index_codes)
+        task_tracker.set_step(task_id, "index", "指数拉取", total=index_total)
+        if overwrite:
+            replace_index_daily(db, date)
+        else:
+            upsert_index_daily(db, date)
+        index_done = (
+            db.query(func.count(distinct(Index1D.ts_code)))
+            .filter(and_(Index1D.trade_date == date, Index1D.ts_code.in_(index_codes)))
+            .scalar()
+            or 0
+        )
+        task_tracker.finish_step(task_id, "index", done=min(index_done, index_total))
+        task_tracker.update_step(task_id, "index", message=f"指数覆盖: {index_done}/{index_total}")
+
         expected_codes = [
             row[0]
             for row in db.query(StockBasic.ts_code)
@@ -132,8 +225,10 @@ def _run_full_day_sync(task_id: str, date: str, overwrite: bool):
         task_tracker.set_step(task_id, "daily", "日线拉取", total=daily_total)
         if overwrite:
             daily_done = replace_daily(db, date)
+            replace_daily_basic(db, date)
         else:
             daily_done = upsert_daily(db, date)
+            upsert_daily_basic(db, date)
         task_tracker.finish_step(task_id, "daily", done=min(daily_done, daily_total) if daily_total > 0 else daily_done)
 
         daily_codes = {row[0] for row in db.query(distinct(Bar1D.ts_code)).filter(Bar1D.trade_date == date).all()}
@@ -178,7 +273,7 @@ def _run_full_day_sync(task_id: str, date: str, overwrite: bool):
 @router.post("/admin/sync")
 def manual_sync(
     background_tasks: BackgroundTasks,
-    mode: str = Query("daily", pattern="^(basic|trade_cal|daily)$"),
+    mode: str = Query("daily", pattern="^(basic|trade_cal|daily|index)$"),
     date: Optional[str] = Query(default=None),
 ):
     background_tasks.add_task(_run_sync, mode, date)
