@@ -39,6 +39,18 @@ export type UnresolvedStockItem = {
   name?: string;
 };
 
+export type AdminTask = {
+  id: string;
+  mode: string;
+  date: string;
+  status: "queued" | "running" | "success" | "failed";
+  progress?: {
+    done: number;
+    total: number;
+    percent: number;
+  };
+};
+
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
 
 export async function searchStocks(q: string): Promise<StockSuggest[]> {
@@ -141,4 +153,16 @@ export async function getUnresolvedStocks(
   if (!res.ok) return { date, items: [] };
   const data = await res.json();
   return { date: data.date || date, items: data.items || [] };
+}
+
+export async function getAdminTasks(
+  status?: "queued" | "running" | "success" | "failed",
+  limit = 200
+): Promise<{ items: AdminTask[] }> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (status) params.set("status", status);
+  const res = await fetch(`${API_BASE}/api/admin/tasks?${params.toString()}`);
+  if (!res.ok) return { items: [] };
+  const data = await res.json();
+  return { items: data.items || [] };
 }

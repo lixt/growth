@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import "./styles.css";
 import SearchBox from "./components/SearchBox";
 import KlineChart from "./components/KlineChart";
 import type { BarPoint, CalendarDayStatus, StockSuggest } from "./api";
 import {
   clearDayData,
+  getAdminTasks,
   getCalendarStatus,
   getKline,
   getLastOpen,
@@ -73,8 +74,11 @@ export default function App() {
   const [selectedPullDate, setSelectedPullDate] = useState<string>(() => ymd(new Date()));
   const [pullMessage, setPullMessage] = useState<string>("");
   const [pulling, setPulling] = useState<boolean>(false);
+  const [monthPulling, setMonthPulling] = useState<boolean>(false);
+  const [monthMessage, setMonthMessage] = useState<string>("");
   const [unresolvedItems, setUnresolvedItems] = useState<Array<{ ts_code: string; name?: string }>>([]);
   const [showMonthPicker, setShowMonthPicker] = useState<boolean>(false);
+  const [runningPullProgress, setRunningPullProgress] = useState<Record<string, number>>({});
 
   useEffect(() => {
     getLastOpen().then((d) => {
@@ -93,12 +97,26 @@ export default function App() {
   }, [selected, lastOpen]);
 
   useEffect(() => {
-    if (activeNav !== "pull" || !pullMonth) return;
+    if (activeNav !== "pull" || !pullMonth) {
+      setRunningPullProgress({});
+      return;
+    }
     let disposed = false;
 
     const refresh = async () => {
-      const data = await getCalendarStatus(pullMonth);
-      if (!disposed) setCalendarDays(data.days || []);
+      const [data, tasks] = await Promise.all([getCalendarStatus(pullMonth), getAdminTasks(undefined, 200)]);
+      if (disposed) return;
+      setCalendarDays(data.days || []);
+      const progressByDate: Record<string, number> = {};
+      (tasks.items || [])
+        .filter((t) => t.mode === "full_day" && (t.status === "queued" || t.status === "running"))
+        .forEach((t) => {
+          const pct = Math.max(0, Math.min(100, Number(t.progress?.percent ?? 0)));
+          if (progressByDate[t.date] === undefined || pct > progressByDate[t.date]) {
+            progressByDate[t.date] = pct;
+          }
+        });
+      setRunningPullProgress(progressByDate);
     };
 
     refresh();
@@ -154,6 +172,7 @@ export default function App() {
     try {
       const res = await triggerFullDaySync(date);
       setPullMessage(`已提交 ${date} 拉取任务${res.task_id ? `，任务ID: ${res.task_id}` : ""}`);
+      setRunningPullProgress((prev) => ({ ...prev, [date]: Math.max(1, prev[date] ?? 0) }));
     } catch {
       setPullMessage(`提交 ${date} 拉取任务失败`);
     } finally {
@@ -168,10 +187,69 @@ export default function App() {
     try {
       const res = await clearDayData(date);
       setPullMessage(`已清除 ${res.date} 数据：日线 ${res.daily_deleted} 条，停牌 ${res.suspend_deleted} 条`);
+      setRunningPullProgress((prev) => {
+        const next = { ...prev };
+        delete next[date];
+        return next;
+      });
     } catch {
       setPullMessage(`清除 ${date} 数据失败`);
     } finally {
       setPulling(false);
+      const data = await getCalendarStatus(pullMonth);
+      setCalendarDays(data.days || []);
+    }
+  }
+
+  async function onPullMonth() {
+    if (!calendarDays.length) return;
+    setMonthPulling(true);
+    const todayKey = ymd(new Date());
+    let skippedFuture = 0;
+    let skippedClosed = 0;
+    let skippedRunning = 0;
+    let queued = 0;
+    let failed = 0;
+    const queuedDates: string[] = [];
+
+    try {
+      const candidates = [...calendarDays].sort((a, b) => a.date.localeCompare(b.date));
+      for (const day of candidates) {
+        if (!day.is_open) {
+          skippedClosed += 1;
+          continue;
+        }
+        if (day.date > todayKey) {
+          skippedFuture += 1;
+          continue;
+        }
+        if (runningPullProgress[day.date] !== undefined) {
+          skippedRunning += 1;
+          continue;
+        }
+        try {
+          await triggerFullDaySync(day.date);
+          queued += 1;
+          queuedDates.push(day.date);
+        } catch {
+          failed += 1;
+        }
+      }
+
+      if (queuedDates.length > 0) {
+        setRunningPullProgress((prev) => {
+          const next = { ...prev };
+          queuedDates.forEach((d) => {
+            next[d] = Math.max(1, next[d] ?? 0);
+          });
+          return next;
+        });
+      }
+      setMonthMessage(
+        `本月批量提交：${queued} 天，失败 ${failed} 天，跳过未来 ${skippedFuture} 天，跳过休市 ${skippedClosed} 天，已在拉取 ${skippedRunning} 天`
+      );
+    } finally {
+      setMonthPulling(false);
       const data = await getCalendarStatus(pullMonth);
       setCalendarDays(data.days || []);
     }
@@ -187,12 +265,19 @@ export default function App() {
     ? Number(selectedDay.unresolved_stock_count ?? Math.max(expectedCount - completedCount, 0))
     : 0;
   const hasPulledData = fetchedCount > 0 || suspendedCount > 0;
+  const todayKey = ymd(new Date());
+  const isSelectedFuture = Boolean(selectedDay && selectedDay.date > todayKey);
+  const isSelectedRunning = Boolean(selectedDay && runningPullProgress[selectedDay.date] !== undefined);
   const progressPct =
     expectedCount > 0 ? Math.min(100, Number(((completedCount / expectedCount) * 100).toFixed(2))) : 0;
   const progressStatus = !selectedDay
     ? { text: "未选择日期", cls: "idle" }
     : !selectedDay.is_open
       ? { text: "休市", cls: "closed" }
+      : isSelectedFuture
+        ? { text: "未来", cls: "idle" }
+      : isSelectedRunning
+        ? { text: "拉取中", cls: "working" }
       : !hasPulledData
         ? { text: "未开始", cls: "idle" }
       : unresolvedCount === 0
@@ -333,6 +418,16 @@ export default function App() {
                     </div>
                   </div>
                 )}
+                <div className="month-batch">
+                  <div className="month-batch-copy">
+                    <div className="month-batch-title">本月批量拉取</div>
+                    <div className="month-batch-desc">已拉取日期会重新拉取，未来交易日和休市日自动跳过。</div>
+                  </div>
+                  <button className="month-batch-btn" disabled={monthPulling} onClick={onPullMonth}>
+                    {monthPulling ? "提交中..." : "拉取本月数据"}
+                  </button>
+                </div>
+                {monthMessage && <div className="ops-hint">{monthMessage}</div>}
                 <div className="calendar-head">
                   {["周一", "周二", "周三", "周四", "周五", "周六", "周日"].map((w) => (
                     <div key={w} className="calendar-week">
@@ -352,8 +447,21 @@ export default function App() {
                         </button>
                       );
                     }
-                    const tag = row.is_open ? (row.is_data_complete ? "已拉取" : "未拉取") : "休市";
-                    const cls = row.is_open ? (row.is_data_complete ? "done" : "todo") : "closed";
+                    const isFuture = d > todayKey;
+                    const runningPct = runningPullProgress[d];
+                    const isRunning = runningPct !== undefined;
+                    const tag = !row.is_open ? "休市" : isFuture ? "未来" : isRunning ? "拉取中" : row.is_data_complete ? "已拉取" : "未拉取";
+                    const cls = !row.is_open ? "closed" : isFuture ? "future" : isRunning ? "running" : row.is_data_complete ? "done" : "todo";
+                    const progressNum = Math.max(0, Math.min(100, Number(runningPct ?? 0)));
+                    const spinnerStyle =
+                      isRunning && !isFuture
+                        ? ({
+                            "--progress": `${progressNum.toFixed(0)}%`,
+                            "--progress-angle": `${(progressNum * 3.6).toFixed(1)}deg`,
+                            "--progress-glow": `${(0.18 + (progressNum / 100) * 0.52).toFixed(3)}`,
+                            "--progress-shadow": `${(0.2 + (progressNum / 100) * 0.55).toFixed(3)}`
+                          } as CSSProperties)
+                        : undefined;
                     return (
                       <button
                         key={d}
@@ -361,7 +469,10 @@ export default function App() {
                         onClick={() => setSelectedPullDate(d)}
                       >
                         <div>{Number(d.slice(-2))}</div>
-                        <div className="day-meta">{tag}</div>
+                        <div className="day-meta-row">
+                          <div className="day-meta">{tag}</div>
+                          {isRunning && !isFuture && <span className="day-spinner" style={spinnerStyle} />}
+                        </div>
                       </button>
                     );
                   })}
@@ -414,14 +525,20 @@ export default function App() {
                         )}
                       </div>
                     </div>
-                    {selectedDay.is_open && (
+                    {selectedDay.is_open && !isSelectedFuture && (
                       <div className="ops-row progress-actions">
-                        {selectedDay.action === "clear" ? (
-                          <button className="clear-btn" disabled={pulling} onClick={() => onClearDay(selectedDay.date)}>
+                        {isSelectedRunning ? (
+                          <button disabled>拉取中...</button>
+                        ) : selectedDay.action === "clear" ? (
+                          <button
+                            className="clear-btn"
+                            disabled={pulling || monthPulling}
+                            onClick={() => onClearDay(selectedDay.date)}
+                          >
                             数据清除
                           </button>
                         ) : (
-                          <button disabled={pulling} onClick={() => onPullDay(selectedDay.date)}>
+                          <button disabled={pulling || monthPulling} onClick={() => onPullDay(selectedDay.date)}>
                             拉取数据
                           </button>
                         )}
